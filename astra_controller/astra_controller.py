@@ -96,10 +96,18 @@ class AstraController:
 
             try:
                 if "joint_l6" in msg.name:
-                    T_msg: geometry_msgs.msg.TransformStamped = tf_buffer.lookup_transform('base_link', 'link_lee_teleop', rclpy.time.Time())
+                    T_msg = tf_buffer.lookup_transform(
+                        'base_link', 'link_lee_teleop',
+                        rclpy.time.Time(),
+                        timeout=rclpy.duration.Duration(seconds=0.1)
+                    )
                     self.joint_states["eef_l"] = pq_from_ros_transform(T_msg.transform)
                 if "joint_r6" in msg.name:
-                    T_msg: geometry_msgs.msg.TransformStamped = tf_buffer.lookup_transform('base_link', 'link_ree_teleop', rclpy.time.Time())
+                    T_msg = tf_buffer.lookup_transform(
+                        'base_link', 'link_ree_teleop',
+                        rclpy.time.Time(),
+                        timeout=rclpy.duration.Duration(seconds=0.1)
+                    )
                     self.joint_states["eef_r"] = pq_from_ros_transform(T_msg.transform)
             except tf2.LookupException:
                 pass
