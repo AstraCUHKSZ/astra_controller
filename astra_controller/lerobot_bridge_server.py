@@ -75,8 +75,17 @@ def _as_float32(values):
     return values
 
 
+def _is_finite_value(value) -> bool:
+    if value is None:
+        return False
+    try:
+        return np.isfinite(np.asarray(value, dtype=np.float32)).all()
+    except (TypeError, ValueError):
+        return False
+
+
 class AstraLeRobotBridge:
-    def __init__(self, space: str = "joint", ready_timeout_s: float = 30.0):
+    def __init__(self, space: str = "joint", ready_timeout_s: float = 120.0):
         if space != "joint":
             raise ValueError("Only joint space is supported by the LeRobot bridge.")
 
@@ -96,13 +105,20 @@ class AstraLeRobotBridge:
         self._fill_optional_defaults()
         missing = [f"image:{name}" for name in CAMERA_NAMES if self.controller.images.get(name) is None]
         missing.extend(
-            f"state:{name}" for name in JOINT_NAMES if self.controller.joint_states.get(name) is None
+            f"state:{name}" for name in JOINT_NAMES if not _is_finite_value(self.controller.joint_states.get(name))
+        )
+        missing.extend(
+            f"state:{name}" for name in ("eef_l", "eef_r", "odom") if not _is_finite_value(self.controller.joint_states.get(name))
         )
         return missing
 
     def _missing_action_keys(self) -> list[str]:
         self._fill_optional_defaults()
-        return [f"command:{name}" for name in JOINT_NAMES if self.controller.joint_commands.get(name) is None]
+        return [
+            f"command:{name}"
+            for name in JOINT_NAMES
+            if not _is_finite_value(self.controller.joint_commands.get(name))
+        ]
 
     def _wait_until_ready(self, missing_fn, label: str) -> None:
         deadline = time.monotonic() + self.ready_timeout_s
@@ -246,7 +262,7 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--space", default="joint", choices=["joint"])
-    parser.add_argument("--ready-timeout-s", type=float, default=30.0)
+    parser.add_argument("--ready-timeout-s", type=float, default=120.0)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
