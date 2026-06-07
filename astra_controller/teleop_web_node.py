@@ -16,6 +16,7 @@ import astra_controller_interfaces.msg
 
 from tf2_ros.transform_listener import TransformListener
 from tf2_ros.buffer import Buffer
+import tf2_py as tf2
 
 import numpy as np
 from pytransform3d import transformations as pt
@@ -52,12 +53,17 @@ def main(args=None):
     tf_listener = TransformListener(tf_buffer, node)
     
     def get_current_eef_pose_cb(side):
-        Tsgoal_msg: geometry_msgs.msg.TransformStamped = tf_buffer.lookup_transform(
-            'base_link',
-            'link_ree_teleop' if side == "right" else 'link_lee_teleop',
-            rclpy.time.Time(),
-            timeout=rclpy.duration.Duration(seconds=0.1)
-        )
+        source_frame = 'link_ree_teleop' if side == "right" else 'link_lee_teleop'
+        try:
+            Tsgoal_msg: geometry_msgs.msg.TransformStamped = tf_buffer.lookup_transform(
+                'base_link',
+                source_frame,
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.1)
+            )
+        except (tf2.LookupException, tf2.ConnectivityException, tf2.ExtrapolationException) as exc:
+            logger.warning(f"failed to lookup TF base_link <- {source_frame}: {exc}")
+            raise
         Tsgoal = pt.transform_from_pq(np.array(pq_from_ros_transform(Tsgoal_msg.transform)))
         return Tsgoal
     teleopoperator.on_get_current_eef_pose = get_current_eef_pose_cb
@@ -143,6 +149,7 @@ def main(args=None):
     
     reset_publisher = node.create_publisher(std_msgs.msg.Bool, 'reset', 10)
     done_publisher = node.create_publisher(std_msgs.msg.Bool, 'done', 10)
+    rerecord_publisher = node.create_publisher(std_msgs.msg.Bool, 'rerecord', 10)
 
     def reset_cb():
         reset_publisher.publish(std_msgs.msg.Bool(data=True))
@@ -151,6 +158,10 @@ def main(args=None):
     def done_cb():
         done_publisher.publish(std_msgs.msg.Bool(data=True))
     teleopoperator.on_done = done_cb
+
+    def rerecord_cb():
+        rerecord_publisher.publish(std_msgs.msg.Bool(data=True))
+    teleopoperator.on_rerecord = rerecord_cb
 
     def get_cb(name):
         def cb(msg: sensor_msgs.msg.Image):

@@ -77,6 +77,13 @@ class AstraController:
             std_msgs.msg.Bool, 'done', cb, rclpy.qos.qos_profile_sensor_data
         )
 
+        def cb(msg):
+            assert msg.data # True
+            self.rerecord = msg.data # True
+        node.create_subscription(
+            std_msgs.msg.Bool, 'rerecord', cb, rclpy.qos.qos_profile_sensor_data
+        )
+
         def get_cb(name):
             def cb(msg: sensor_msgs.msg.Image):
                 assert msg.encoding == "rgb8"
@@ -166,6 +173,7 @@ class AstraController:
     def reset_buf(self):
         self.reset = False
         self.done = False
+        self.rerecord = False
 
         self.images = {
             "head": None, # np.zeros((360, 640, 3), np.uint8),

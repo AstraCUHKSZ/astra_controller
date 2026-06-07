@@ -43,12 +43,13 @@ class ArmController:
         return arr
 
     def __init__(self, name, do_init=False):
+        self.name = name
         logger.info(f"Using device {name}")
 
         self.state_cb = None
         self.pong_cb = None
 
-        self.ser = serial.Serial(name, 921600, timeout=None)
+        self.ser = serial.Serial(name, 921600, timeout=0.1)
         # self.ser.rts = False
 
         # When True, forward non-protocol bytes from the controller to stdout.
@@ -106,68 +107,74 @@ class ArmController:
             while not self.quit.is_set():
                 try:
                     data = self.ser.read(1)
-                except serial.SerialException as exc:
-                    logger.error(f"serial read failed: {exc}")
-                    break
-                if not (data[0] == self.COMM_HEAD): # 逐步同步
-                    if data[0] == "\n".encode("ascii")[0] or data[0] == "\r".encode("ascii")[0]:
-                        if len(self.databuf) > 0 and set(self.databuf) <= set("0123456789-., ".encode("ascii")):
-                            try:
-                                debugdata = [float(x) for x in self.databuf.decode("ascii").split(",")]
-                                if self.debug_cb:
-                                    self.debug_cb(debugdata)
-                            except:
-                                pass
-                        elif len(self.databuf) == 1:
-                            print(self.databuf)
+                    if not data:
+                        continue
+                    if not (data[0] == self.COMM_HEAD): # 逐步同步
+                        if data[0] == "\n".encode("ascii")[0] or data[0] == "\r".encode("ascii")[0]:
+                            if len(self.databuf) > 0 and set(self.databuf) <= set("0123456789-., ".encode("ascii")):
+                                try:
+                                    debugdata = [float(x) for x in self.databuf.decode("ascii").split(",")]
+                                    if self.debug_cb:
+                                        self.debug_cb(debugdata)
+                                except Exception:
+                                    logger.exception("failed to parse arm debug output")
+                            elif len(self.databuf) == 1:
+                                print(self.databuf)
 
-                        self.databuf = bytearray()
-                    else:
-                        self.databuf.extend(data)
+                            self.databuf = bytearray()
+                        else:
+                            self.databuf.extend(data)
 
-                    if self.print_device_output:
-                        sys.stdout.buffer.write(data)
-                        sys.stdout.flush()
-                    continue
+                        if self.print_device_output:
+                            sys.stdout.buffer.write(data)
+                            sys.stdout.flush()
+                        continue
 
-                try:
-                    data += self.ser.read(self.COMM_LEN - 1)
-                except serial.SerialException as exc:
-                    logger.error(f"serial read failed: {exc}")
-                    break
-                assert(len(data) == self.COMM_LEN)
+                    frame_tail = self.ser.read(self.COMM_LEN - 1)
+                    data += frame_tail
+                    if len(data) != self.COMM_LEN:
+                        logger.error(f"short serial frame: expected {self.COMM_LEN}, got {len(data)}")
+                        continue
 
-                if not self.checksum(data):
-                    logger.error(f"checksum failed {data.hex()}")
-                    continue
+                    if not self.checksum(data):
+                        logger.error(f"checksum failed {data.hex()}")
+                        continue
 
-                if data[1] == self.COMM_TYPE_PONG:
-                    if self.pong_cb is not None:
-                        self.pong_cb(struct.unpack('>HHHHHHxxxx', data[2:-1]))
-                elif data[1] == self.COMM_TYPE_FEEDBACK:
-                    position = self.to_si_unit(np.array(struct.unpack('>HHHHHHxxxx', data[2:-1])))
-                    this_time = time.time()
-                    with self.lock:
-                        if self.last_time is None:
+                    if data[1] == self.COMM_TYPE_PONG:
+                        if self.pong_cb is not None:
+                            self.pong_cb(struct.unpack('>HHHHHHxxxx', data[2:-1]))
+                    elif data[1] == self.COMM_TYPE_FEEDBACK:
+                        position = self.to_si_unit(np.array(struct.unpack('>HHHHHHxxxx', data[2:-1])))
+                        this_time = time.time()
+                        with self.lock:
+                            if self.last_time is None:
+                                self.last_position = position
+                                self.last_velocity = np.array([0, 0, 0, 0, 0, 0])
+                                self.last_effort = np.array([0, 0, 0, 0, 0, 0])
+                                self.last_time = this_time - 1 # in case of dividing 0
+                            delta_time = this_time - self.last_time
+                            velocity = (position - self.last_position) / delta_time
+                            effort = (velocity - self.last_velocity) / delta_time # without bias (gravity) and mass
                             self.last_position = position
-                            self.last_velocity = np.array([0, 0, 0, 0, 0, 0])
-                            self.last_effort = np.array([0, 0, 0, 0, 0, 0])
-                            self.last_time = this_time - 1 # in case of dividing 0
-                        delta_time = this_time - self.last_time
-                        velocity = (position - self.last_position) / delta_time
-                        effort = (velocity - self.last_velocity) / delta_time # without bias (gravity) and mass
-                        self.last_position = position
-                        self.last_velocity = velocity
-                        self.last_effort = effort
-                        self.last_time = this_time
-                        if self.state_cb is not None:
-                            self.state_cb(self.last_position, self.last_velocity, self.last_effort, self.last_time)
-                elif data[1] == self.COMM_TYPE_CONFIG_FEEDBACK:
-                    self.config_cb(data[2:-1]) # TODO 解决没有时报错
-                else:
-                    # sys.stdout.buffer.write(data)
-                    # sys.stdout.flush()
-                    pass
+                            self.last_velocity = velocity
+                            self.last_effort = effort
+                            self.last_time = this_time
+                            if self.state_cb is not None:
+                                self.state_cb(self.last_position, self.last_velocity, self.last_effort, self.last_time)
+                    elif data[1] == self.COMM_TYPE_CONFIG_FEEDBACK:
+                        if self.config_cb is not None:
+                            self.config_cb(data[2:-1])
+                        else:
+                            logger.warning(f"config feedback received without callback: {data[2:-1].hex()}")
+                    else:
+                        # sys.stdout.buffer.write(data)
+                        # sys.stdout.flush()
+                        pass
+                except serial.SerialException as exc:
+                    logger.error(f"serial read failed: {exc}")
+                    break
+                except Exception:
+                    logger.exception("arm serial receive loop error")
         finally:
             logger.info("thread exiting")
 

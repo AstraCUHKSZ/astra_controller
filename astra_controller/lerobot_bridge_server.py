@@ -168,7 +168,9 @@ class AstraLeRobotBridge:
             images = self.controller.read_cameras()
             done = bool(self.controller.done)
             reset = bool(self.controller.reset)
+            rerecord = bool(self.controller.rerecord)
             self.controller.done = False
+            self.controller.rerecord = False
 
         return {
             "state": _as_float32(state),
@@ -184,6 +186,7 @@ class AstraLeRobotBridge:
             "images": images,
             "done": done,
             "reset": reset,
+            "rerecord": rerecord,
         }
 
     def get_action(self):
